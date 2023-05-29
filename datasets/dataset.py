@@ -19,12 +19,12 @@ class CTPDataset(Dataset):
         self.split = split
 
         if split=='train':
-            self.labeled_list = sorted(glob(os.path.join(base_dir, 'labeled','*')))[:5]
-            self.unlabeled_list = sorted(glob(os.path.join(base_dir, 'unlabeled','*')))[:5]
+            self.labeled_list = sorted(glob(os.path.join(base_dir, 'labeled','*')))
+            self.unlabeled_list = sorted(glob(os.path.join(base_dir, 'unlabeled','*')))
 
         elif split == 'validation':
-            self.labeled_list = sorted(glob(os.path.join(base_dir, 'labeled_val','*')))[:5]
-            self.unlabeled_list = sorted(glob(os.path.join(base_dir, 'unlabeled_val','*')))[:5]
+            self.labeled_list = sorted(glob(os.path.join(base_dir, 'labeled_val','*')))
+            self.unlabeled_list = sorted(glob(os.path.join(base_dir, 'unlabeled_val','*')))
         
 
         print("total {} labeled samples".format(len(self.labeled_list)))
