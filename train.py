@@ -52,7 +52,7 @@ parser.add_argument('--patch_z', type=int,
 
 
 parser.add_argument('--max_iterations', type=int,
-                    default=20000, help='maximum iterations to train')
+                    default=10000, help='maximum iterations to train')
 
 parser.add_argument('--batch_size', type=int, default=64,
                     help='batch_size per gpu')
@@ -74,7 +74,7 @@ parser.add_argument('--lr_c', type=float,  default=1e-3,
 parser.add_argument('--segloss', type=str,
                     default='dicece', help='ce | dicece | focal  Loss for segmentation')
 parser.add_argument('--rampmax', type=float,
-                    default=0.5, help='When will the strength of consistency loss reach its max (1.0 = at the end of training)')
+                    default=0.75, help='When will the strength of consistency loss reach its max (1.0 = at the end of training)')
 parser.add_argument('--gamma', type=float,  default=0.8,
                     help='balance factor to control supervised fulldata map loss and supervised partiallabel seg loss')
 
