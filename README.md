@@ -1,4 +1,9 @@
 # CTP_Phase2
+![architecture](https://github.com/baejustin/CTP_Phase2/assets/16787987/9f5d2377-4458-48f0-8fc4-b444a179a935)
+
+This code is an implementation of our most recent CTP paper. 
+
+
 # Usage
 1. Clone the repo
 
