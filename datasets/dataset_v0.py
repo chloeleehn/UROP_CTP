@@ -8,11 +8,10 @@ import h5py
 import itertools
 from torch.utils.data.sampler import Sampler
 from skimage.measure import regionprops, label, find_contours
-#import math
 
 class CTPDataset(Dataset):
     """ CTP Dataset """
-    def __init__(self, base_dir=None, split='train', transform=None, hon=False, res = 1):
+    def __init__(self, base_dir=None, split='train', transform=None, hon=False):
         self.transform = transform
         self.labeled_list = []
         self.unlabeled_list = []
@@ -27,9 +26,6 @@ class CTPDataset(Dataset):
             self.labeled_list = sorted(glob(os.path.join(base_dir, 'labeled_val','*')))
             self.unlabeled_list = sorted(glob(os.path.join(base_dir, 'unlabeled_val','*')))
         
-        # Decrease temporal resolution
-        self.labeled_list = self.labeled_list[::res]
-        self.unlabeled_list = self.unlabeled_list[::res]
 
         print("total {} labeled samples".format(len(self.labeled_list)))
         print("total {} unlabeled samples".format(len(self.unlabeled_list)))
