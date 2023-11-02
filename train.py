@@ -226,7 +226,11 @@ if __name__ == "__main__":
     optimizer_ED = optim.Adam(model_ED.parameters(), lr=base_lr_ED, betas=(0.5, 0.99))
     optimizer_F = optim.Adam(model_F.parameters(), lr = base_lr_F, betas=(0.5, 0.99))
     optimizer_C = optim.Adam(model_C.parameters(), lr = base_lr_C, betas=(0.5, 0.99))
+<<<<<<< HEAD
     optimizer_Dis = optim.Adam(discriminator.parameters(), lr=base_lr_Dis, betas=(0.5, 0.99))
+=======
+    optimizer_Dis = optim.Adam(discriminator.parameters(), lr=3e-4, betas=(0.5, 0.99))
+>>>>>>> origin/main
 
     
     foc_loss = FocalLoss()
@@ -306,13 +310,21 @@ if __name__ == "__main__":
             # Supervised segmentation loss - only for labeled batch where GT seg is available
             loss_seg = seg_loss_fn(out_seg_lab, seg_batch)
             loss_pseudo_seg = seg_loss_fn(out_pseudo_seg_lab, seg_batch)
+
+            # Real images are considered as real (label=1)
+            real_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
+            real_predictions = discriminator(seg_batch.to(device))
+            real_loss = adversarial_loss(real_predictions, real_labels)
             
+<<<<<<< HEAD
             ##### Start of GAN code #####
             # Real images are considered as real (label=1)
             real_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
             real_predictions = discriminator(seg_batch.to(device))
             real_loss = adversarial_loss(real_predictions, real_labels)
             
+=======
+>>>>>>> origin/main
             # Generated images are considered as fake (label=0)
             fake_labels = torch.zeros(seg_batch.size(0), 1, 4, 4).to(device)
             fake_predictions = discriminator(out_pseudo_seg_lab.detach())
@@ -322,9 +334,14 @@ if __name__ == "__main__":
 
             # Compute the generator's loss based on the discriminator's output
             adversarial_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
+<<<<<<< HEAD
             adversarial_predictions = discriminator(out_pseudo_seg_lab.to(device))
             generator_loss = adversarial_loss(adversarial_predictions, adversarial_labels)
             ##### End of GAN code #####
+=======
+            adversarial_predictions = discriminator(out_seg_lab.to(device))
+            generator_loss = adversarial_loss(adversarial_predictions, adversarial_labels)
+>>>>>>> origin/main
 
             # Map estimation loss
             loss_map_tmax_lab = map_loss_compute(out_map_tmax_lab, tmax_batch_labeled)
@@ -336,7 +353,11 @@ if __name__ == "__main__":
             loss_cons_lab = torch.mean((out_seg_lab - out_pseudo_seg_lab) ** 2) * consistency_weight
 
 
+<<<<<<< HEAD
             supervised_seg_loss_lab = loss_seg + loss_pseudo_seg + 0.1*generator_loss
+=======
+            supervised_seg_loss_lab = loss_seg + loss_pseudo_seg + generator_loss
+>>>>>>> origin/main
 
             supervised_map_loss_lab = (loss_map_tmax_lab+\
                                             loss_map_mtt_lab+\
