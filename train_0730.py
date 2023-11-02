@@ -27,7 +27,6 @@ from networks.c import *
 from networks.ed import create_model_ED
 from networks.f import create_model_F
 from datetime import datetime
-from networks.discriminator import Discriminator
 
 
 
@@ -69,9 +68,6 @@ parser.add_argument('--lr_f', type=float,  default=5e-3,
                     help='starting lr for model F')
 parser.add_argument('--lr_c', type=float,  default=1e-3,
                     help='starting lr for model C')
-parser.add_argument('--lr_dis', type=float,  default=1e-3,
-                    help='starting lr for discrimintor')
-                    
 
 
 
@@ -93,8 +89,6 @@ parser.add_argument('--print_sample_freq', type=int,  default=2000, help='how fr
 parser.add_argument('--save_ckpt_freq', type=int,  default=2000, help='how frequently save model checkpoints')
 
 parser.add_argument('--loglevel', choices=['debug', 'info', 'critical'], default='info', help='Log level')
-
-parser.add_argument('--res', type=int,  default=1, help='x, temporal resolution = 1/x')
 args = parser.parse_args()
 
 
@@ -162,7 +156,6 @@ max_iterations = args.max_iterations
 base_lr_ED = args.lr_ed
 base_lr_F = args.lr_f
 base_lr_C = args.lr_c
-base_lr_Dis = args.lr_dis
 
 # 4 parameter maps + 1 segmentation
 ED_decoder_branches = 5  
@@ -171,8 +164,6 @@ ED_input_channels = args.patch_z
 # 4 predicted parameter maps as inputs to F
 F_input_channels = ED_decoder_branches -1
 
-# Move the target tensor to the GPU
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 
@@ -185,7 +176,6 @@ if __name__ == "__main__":
                              n_filters = 16)
     model_C = AdversarialNetwork(max_iterations).cuda()  # Domain adaptation module
     # https://arxiv.org/abs/1505.07818 - Domain-Adversarial training of neural networks
-    discriminator = Discriminator(input_channel = 1, n_filters = 16).to(device)
 
     db_train = CTPDataset(base_dir=data_path,
                        split='train',  # train/val split
@@ -194,7 +184,9 @@ if __name__ == "__main__":
                            RandomCrop(patch_size, args.crop_offset),
                            ToTensor(),
                        ]),
-                       res = args.res)
+                       res = 2)
+
+
 
     labeled_num, unlabeled_num =  db_train.__len__()
 
@@ -216,8 +208,7 @@ if __name__ == "__main__":
         
     # trainloader = DataLoader(db_train, batch_sampler=batch_sampler,
     #                          num_workers=4, pin_memory=True, worker_init_fn=worker_init_fn)
-    trainloader = DataLoader(db_train, batch_sampler=batch_sampler)
-
+    trainloader = DataLoader(db_train, batch_sampler=batch_sampler, num_workers = 32)
 
     model_ED.train()
     model_F.train()
@@ -226,15 +217,13 @@ if __name__ == "__main__":
     optimizer_ED = optim.Adam(model_ED.parameters(), lr=base_lr_ED, betas=(0.5, 0.99))
     optimizer_F = optim.Adam(model_F.parameters(), lr = base_lr_F, betas=(0.5, 0.99))
     optimizer_C = optim.Adam(model_C.parameters(), lr = base_lr_C, betas=(0.5, 0.99))
-    optimizer_Dis = optim.Adam(discriminator.parameters(), lr=base_lr_Dis, betas=(0.5, 0.99))
 
-    
     foc_loss = FocalLoss()
     dicece = BCEDicePenalizeBorderLoss(dice_ratio=args.dice_ratio)  # dice + crossentropy
     ce_loss = BCEWithLogitsLoss() # crossentropy
     mse_loss =  MSELoss()
     ssim_loss = StructuralSimilarityIndexMeasure(data_range=1.0).cuda()
-    adversarial_loss = BCEWithLogitsLoss()
+    
 
     if args.segloss == 'focal':
         seg_loss_fn = foc_loss
@@ -248,7 +237,8 @@ if __name__ == "__main__":
         mse_loss_component = mse_loss(pred_map, gt_map)
         return ssim_loss_component + mse_loss_component 
 
-    logging.info("{} itertations per epoch".format(len(trainloader)))
+    #logging.info("{} itertations per epoch".format(len(trainloader)))
+    logger.info("{} itertations per epoch".format(len(trainloader)))
 
 
     iter_num = 0
@@ -258,7 +248,8 @@ if __name__ == "__main__":
 
     for epoch_num in iterator:
         for _, sampled_batch in enumerate(trainloader):
-
+        
+        
             labeled_flag = sampled_batch['labeled']
             assert torch.all(labeled_flag[:labeled_bs]) # All are labeled
             assert not torch.any(labeled_flag[labeled_bs:]) # All are unlabeled
@@ -270,13 +261,16 @@ if __name__ == "__main__":
             cbv_batch_labeled = sampled_batch['cbv'][:labeled_bs].cuda()
             cbf_batch_labeled = sampled_batch['cbf'][:labeled_bs].cuda()
             seg_batch = sampled_batch['seg'][:labeled_bs].cuda()
-
+            
+            # print("total {} sample".format(len(sampled_batch['data'])))
+            
             # unlabeled data load
             data_batch_unlabeled = sampled_batch['data'][labeled_bs:].cuda()
             tmax_batch_unlabeled = sampled_batch['tmax'][labeled_bs:].cuda()
             mtt_batch_unlabeled = sampled_batch['mtt'][labeled_bs:].cuda()
             cbv_batch_unlabeled = sampled_batch['cbv'][labeled_bs:].cuda()
             cbf_batch_unlabeled = sampled_batch['cbf'][labeled_bs:].cuda()
+            
 
             # strength of L_cons weight. 
             consistency_weight = get_current_consistency_weight(epoch_num, max_epoch, args.rampmax)
@@ -288,10 +282,9 @@ if __name__ == "__main__":
             bottleneck_feature_lab = fuse_feat_lab[-1]
 
             out_seg_lab = out_dict_lab['out_seg']
-            # all the predicted segmentation maps
             out_map_tmax_lab, out_map_mtt_lab, out_map_cbv_lab, out_map_cbf_lab = \
                 out_dict_lab['out_map_tmax'],out_dict_lab['out_map_mtt'],out_dict_lab['out_map_cbv'],out_dict_lab['out_map_cbf']
-
+            
             # fuse predicted seg to input to F
             model_F_input_lab = torch.cat((
                     out_map_tmax_lab + out_seg_lab,
@@ -303,28 +296,11 @@ if __name__ == "__main__":
             # predicted pseudo seg mask
             out_pseudo_seg_lab = model_F(model_F_input_lab, fuse_feat_lab)
 
+
             # Supervised segmentation loss - only for labeled batch where GT seg is available
             loss_seg = seg_loss_fn(out_seg_lab, seg_batch)
             loss_pseudo_seg = seg_loss_fn(out_pseudo_seg_lab, seg_batch)
             
-            ##### Start of GAN code #####
-            # Real images are considered as real (label=1)
-            real_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
-            real_predictions = discriminator(seg_batch.to(device))
-            real_loss = adversarial_loss(real_predictions, real_labels)
-            
-            # Generated images are considered as fake (label=0)
-            fake_labels = torch.zeros(seg_batch.size(0), 1, 4, 4).to(device)
-            fake_predictions = discriminator(out_pseudo_seg_lab.detach())
-            fake_loss = adversarial_loss(fake_predictions, fake_labels)
-            
-            discriminator_loss = real_loss + fake_loss
-
-            # Compute the generator's loss based on the discriminator's output
-            adversarial_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
-            adversarial_predictions = discriminator(out_pseudo_seg_lab.to(device))
-            generator_loss = adversarial_loss(adversarial_predictions, adversarial_labels)
-            ##### End of GAN code #####
 
             # Map estimation loss
             loss_map_tmax_lab = map_loss_compute(out_map_tmax_lab, tmax_batch_labeled)
@@ -336,7 +312,7 @@ if __name__ == "__main__":
             loss_cons_lab = torch.mean((out_seg_lab - out_pseudo_seg_lab) ** 2) * consistency_weight
 
 
-            supervised_seg_loss_lab = loss_seg + loss_pseudo_seg + 0.1*generator_loss
+            supervised_seg_loss_lab = loss_seg + loss_pseudo_seg 
 
             supervised_map_loss_lab = (loss_map_tmax_lab+\
                                             loss_map_mtt_lab+\
@@ -362,13 +338,8 @@ if __name__ == "__main__":
             loss_labeled_batch.backward()
 
             optimizer_ED.step()
-            optimizer_F.step()
+            optimizer_F.step()  
             optimizer_C.step()
-
-            ##### GAN implementation #####
-            optimizer_Dis.zero_grad()
-            discriminator_loss.backward()
-            optimizer_Dis.step()
 
             # Start unlabeled batch ################################################################################################################################################################################################################################################################################
 
@@ -396,25 +367,6 @@ if __name__ == "__main__":
             loss_map_cbv_unlab = map_loss_compute(out_map_cbv_unlab, cbv_batch_unlabeled)
             loss_map_cbf_unlab = map_loss_compute(out_map_cbf_unlab, cbf_batch_unlabeled)
 
-            ##### Start of GAN code #####
-            # Real images are considered as real (label=1)
-            real_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
-            real_predictions = discriminator(seg_batch.to(device))
-            real_loss = adversarial_loss(real_predictions, real_labels)
-            
-            # Generated images are considered as fake (label=0)
-            fake_labels = torch.zeros(seg_batch.size(0), 1, 4, 4).to(device)
-            fake_predictions = discriminator(out_pseudo_seg_unlab.detach())
-            fake_loss = adversarial_loss(fake_predictions, fake_labels)
-            
-            discriminator_loss = real_loss + fake_loss
-
-            # Compute the generator's loss based on the discriminator's output
-            adversarial_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
-            adversarial_predictions = discriminator(out_pseudo_seg_unlab.to(device))
-            generator_loss = adversarial_loss(adversarial_predictions, adversarial_labels)
-            ##### End of GAN code #####
-
             # Consistency Loss
             loss_cons_unlab = torch.mean((out_seg_unlab - out_pseudo_seg_unlab) ** 2) * consistency_weight
 
@@ -429,7 +381,7 @@ if __name__ == "__main__":
 
             loss_unlabeled_batch = supervised_map_loss_unlab +\
                                     loss_cons_unlab +\
-                                    da_loss_unlab + 0.1*generator_loss
+                                    da_loss_unlab
 
             optimizer_ED.zero_grad()
             # optimizer_F.zero_grad()    
@@ -440,11 +392,6 @@ if __name__ == "__main__":
             optimizer_ED.step()
             # optimizer_F.step()   # Freeze Model F if the ground truth label is not available!
             optimizer_C.step()
-
-            ##### GAN implementation #####
-            optimizer_Dis.zero_grad()
-            discriminator_loss.backward()
-            optimizer_Dis.step()
     
             # Pass END #################################################
 
@@ -509,7 +456,23 @@ if __name__ == "__main__":
             writer.add_scalar('consistency_weight', consistency_weight, iter_num)
                     
             if iter_num % args.log_loss_freq == 0:
-                logging.info("EPOCH {} ITER {} consweight {:.3f} | Seg {:.3f} SegPseudo {:.3f} Tmax {:.3f} Mtt {:.3f} Cbv {:.3f} Cbf {:.3f} Cons_lab {:.3f} Cons_unlab {:.3f} Da_lab {:.3f} Da_unlab {:.3f}"\
+                #logging.info("EPOCH {} ITER {} consweight {:.3f} | Seg {:.3f} SegPseudo {:.3f} Tmax {:.3f} Mtt {:.3f} Cbv {:.3f} Cbf {:.3f} Cons_lab {:.3f} Cons_unlab {:.3f} Da_lab {:.3f} Da_unlab {:.3f}"\
+                #            .format(
+                #                    epoch_num,
+                #                    iter_num, 
+                #                    consistency_weight, 
+                #                    loss_seg.item(), 
+                #                    loss_pseudo_seg.item(), 
+                #                    (loss_map_tmax_lab.item() + loss_map_tmax_unlab.item())/2,
+                #                    (loss_map_mtt_lab.item() + loss_map_mtt_unlab.item())/2,
+                #                    (loss_map_cbv_lab.item() + loss_map_cbv_unlab.item())/2,
+                #                    (loss_map_cbf_lab.item() + loss_map_cbf_unlab.item())/2,
+                #                    loss_cons_lab.item(),
+                #                    loss_cons_unlab.item(),
+                #                    da_loss_lab.item(),
+                #                    da_loss_unlab.item()
+                #            ))
+                logger.info("EPOCH {} ITER {} consweight {:.3f} | Seg {:.3f} SegPseudo {:.3f} Tmax {:.3f} Mtt {:.3f} Cbv {:.3f} Cbf {:.3f} Cons_lab {:.3f} Cons_unlab {:.3f} Da_lab {:.3f} Da_unlab {:.3f}"\
                             .format(
                                     epoch_num,
                                     iter_num, 
@@ -551,6 +514,9 @@ if __name__ == "__main__":
 
                     imsave('{}/{}_map_lab_{}.png'.format(sample_output_path,iter_num, b), map_montage)
                     imsave('{}/{}_seg_lab_{}.png'.format(sample_output_path,iter_num, b), seg_montage)
+                    
+                    logger.info('map_lab image saved - %s_%i' % (sample_output_path,iter_num))
+                    logger.info('seg_lab image saved - %s_%i' % (sample_output_path,iter_num))
 
                     break
 
@@ -574,6 +540,9 @@ if __name__ == "__main__":
                     imsave('{}/{}_map_unlab_{}.png'.format(sample_output_path,iter_num, b), map_montage)
                     imsave('{}/{}_seg_unlab_{}.png'.format(sample_output_path,iter_num, b), seg_montage)
 
+                    logger.info('map_unlab image saved - %s_%i' % (sample_output_path,iter_num))
+                    logger.info('seg_unlab image saved - %s_%i' % (sample_output_path,iter_num))
+
                     break
 
 
@@ -592,13 +561,17 @@ if __name__ == "__main__":
                 save_C_path = os.path.join(
                     snapshot_path, 'C_iter_' + checkpoint_identifier)
                 
-                logging.info("saving model to {} at iter {}".format(snapshot_path, iter_num))
+                #logging.info("saving model to {} at iter {}".format(snapshot_path, iter_num))
+                logger.info("saving model to {} at iter {}".format(snapshot_path, iter_num))
                 torch.save(model_ED.state_dict(), save_ED_path)
-                logging.info("- save model ED to {}".format(save_ED_path))
+                #logging.info("- save model ED to {}".format(save_ED_path))
+                logger.info("- save model ED to {}".format(save_ED_path))
                 torch.save(model_F.state_dict(), save_F_path)
-                logging.info("- save model F to {}".format(save_F_path))
+                #logging.info("- save model F to {}".format(save_F_path))
+                logger.info("- save model F to {}".format(save_F_path))
                 torch.save(model_C.state_dict(), save_C_path)
-                logging.info("- save model C to {}".format(save_C_path))
+                #logging.info("- save model C to {}".format(save_C_path))
+                logger.info("- save model C to {}".format(save_C_path))
 
 
             if iter_num >= max_iterations:
@@ -609,4 +582,3 @@ if __name__ == "__main__":
             break
 
     writer.close()
-    

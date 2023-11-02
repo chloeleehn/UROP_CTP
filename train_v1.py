@@ -12,6 +12,7 @@ import torch
 import torch.optim as optim
 from torchvision import transforms
 from torch.utils.data import DataLoader
+torch.cuda.empty_cache()
 
 # Losses
 from utils.losses import FocalLoss, BCEDicePenalizeBorderLoss
@@ -27,7 +28,6 @@ from networks.c import *
 from networks.ed import create_model_ED
 from networks.f import create_model_F
 from datetime import datetime
-from networks.discriminator import Discriminator
 
 
 
@@ -69,9 +69,6 @@ parser.add_argument('--lr_f', type=float,  default=5e-3,
                     help='starting lr for model F')
 parser.add_argument('--lr_c', type=float,  default=1e-3,
                     help='starting lr for model C')
-parser.add_argument('--lr_dis', type=float,  default=1e-3,
-                    help='starting lr for discrimintor')
-                    
 
 
 
@@ -93,10 +90,16 @@ parser.add_argument('--print_sample_freq', type=int,  default=2000, help='how fr
 parser.add_argument('--save_ckpt_freq', type=int,  default=2000, help='how frequently save model checkpoints')
 
 parser.add_argument('--loglevel', choices=['debug', 'info', 'critical'], default='info', help='Log level')
-
 parser.add_argument('--res', type=int,  default=1, help='x, temporal resolution = 1/x')
 args = parser.parse_args()
 
+log_mapping = {
+    'debug': logging.DEBUG,
+    'info': logging.INFO,
+    'critical': logging.CRITICAL,
+}
+logging.basicConfig(encoding='utf-8', level=log_mapping[args.loglevel])
+logging.info(str(args))
 
 # Seed everything
 random.seed(args.seed)
@@ -121,29 +124,6 @@ sample_output_path = os.path.join(experiment_output_path, 'sample_train_output')
 os.makedirs(sample_output_path, exist_ok=True)
 
 
-### logger
-log_mapping = {
-    'debug': logging.DEBUG,
-    'info': logging.INFO,
-    'critical': logging.CRITICAL,
-}
-logging.basicConfig(encoding='utf-8', level=log_mapping[args.loglevel])
-
-logger = logging.getLogger('MainLogger')
-log_filename = '{:%Y-%m-%d-%H-%M-%S}.log'.format(datetime.now())
-log_filepath = os.path.join(experiment_output_path, 'log')
-os.makedirs(log_filepath, exist_ok=True)
-fh = logging.FileHandler(os.path.join(log_filepath,log_filename))
-formatter = logging.Formatter('%(asctime)s | %(message)s')
-fh.setFormatter(formatter)
-logger.addHandler(fh)
-
-##logging.info(str(args))
-logger.info(str(args))
-
-### end of logger
-
-
 # dimension of input 3D CTP volume - H,W,T
 patch_size = (args.patch_x,args.patch_y,args.patch_z)
 
@@ -162,7 +142,6 @@ max_iterations = args.max_iterations
 base_lr_ED = args.lr_ed
 base_lr_F = args.lr_f
 base_lr_C = args.lr_c
-base_lr_Dis = args.lr_dis
 
 # 4 parameter maps + 1 segmentation
 ED_decoder_branches = 5  
@@ -171,8 +150,6 @@ ED_input_channels = args.patch_z
 # 4 predicted parameter maps as inputs to F
 F_input_channels = ED_decoder_branches -1
 
-# Move the target tensor to the GPU
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 
@@ -185,7 +162,6 @@ if __name__ == "__main__":
                              n_filters = 16)
     model_C = AdversarialNetwork(max_iterations).cuda()  # Domain adaptation module
     # https://arxiv.org/abs/1505.07818 - Domain-Adversarial training of neural networks
-    discriminator = Discriminator(input_channel = 1, n_filters = 16).to(device)
 
     db_train = CTPDataset(base_dir=data_path,
                        split='train',  # train/val split
@@ -195,6 +171,8 @@ if __name__ == "__main__":
                            ToTensor(),
                        ]),
                        res = args.res)
+
+
 
     labeled_num, unlabeled_num =  db_train.__len__()
 
@@ -226,7 +204,6 @@ if __name__ == "__main__":
     optimizer_ED = optim.Adam(model_ED.parameters(), lr=base_lr_ED, betas=(0.5, 0.99))
     optimizer_F = optim.Adam(model_F.parameters(), lr = base_lr_F, betas=(0.5, 0.99))
     optimizer_C = optim.Adam(model_C.parameters(), lr = base_lr_C, betas=(0.5, 0.99))
-    optimizer_Dis = optim.Adam(discriminator.parameters(), lr=base_lr_Dis, betas=(0.5, 0.99))
 
     
     foc_loss = FocalLoss()
@@ -234,7 +211,7 @@ if __name__ == "__main__":
     ce_loss = BCEWithLogitsLoss() # crossentropy
     mse_loss =  MSELoss()
     ssim_loss = StructuralSimilarityIndexMeasure(data_range=1.0).cuda()
-    adversarial_loss = BCEWithLogitsLoss()
+    
 
     if args.segloss == 'focal':
         seg_loss_fn = foc_loss
@@ -288,10 +265,9 @@ if __name__ == "__main__":
             bottleneck_feature_lab = fuse_feat_lab[-1]
 
             out_seg_lab = out_dict_lab['out_seg']
-            # all the predicted segmentation maps
             out_map_tmax_lab, out_map_mtt_lab, out_map_cbv_lab, out_map_cbf_lab = \
                 out_dict_lab['out_map_tmax'],out_dict_lab['out_map_mtt'],out_dict_lab['out_map_cbv'],out_dict_lab['out_map_cbf']
-
+            
             # fuse predicted seg to input to F
             model_F_input_lab = torch.cat((
                     out_map_tmax_lab + out_seg_lab,
@@ -303,28 +279,11 @@ if __name__ == "__main__":
             # predicted pseudo seg mask
             out_pseudo_seg_lab = model_F(model_F_input_lab, fuse_feat_lab)
 
+
             # Supervised segmentation loss - only for labeled batch where GT seg is available
             loss_seg = seg_loss_fn(out_seg_lab, seg_batch)
             loss_pseudo_seg = seg_loss_fn(out_pseudo_seg_lab, seg_batch)
             
-            ##### Start of GAN code #####
-            # Real images are considered as real (label=1)
-            real_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
-            real_predictions = discriminator(seg_batch.to(device))
-            real_loss = adversarial_loss(real_predictions, real_labels)
-            
-            # Generated images are considered as fake (label=0)
-            fake_labels = torch.zeros(seg_batch.size(0), 1, 4, 4).to(device)
-            fake_predictions = discriminator(out_pseudo_seg_lab.detach())
-            fake_loss = adversarial_loss(fake_predictions, fake_labels)
-            
-            discriminator_loss = real_loss + fake_loss
-
-            # Compute the generator's loss based on the discriminator's output
-            adversarial_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
-            adversarial_predictions = discriminator(out_pseudo_seg_lab.to(device))
-            generator_loss = adversarial_loss(adversarial_predictions, adversarial_labels)
-            ##### End of GAN code #####
 
             # Map estimation loss
             loss_map_tmax_lab = map_loss_compute(out_map_tmax_lab, tmax_batch_labeled)
@@ -336,7 +295,7 @@ if __name__ == "__main__":
             loss_cons_lab = torch.mean((out_seg_lab - out_pseudo_seg_lab) ** 2) * consistency_weight
 
 
-            supervised_seg_loss_lab = loss_seg + loss_pseudo_seg + 0.1*generator_loss
+            supervised_seg_loss_lab = loss_seg + loss_pseudo_seg 
 
             supervised_map_loss_lab = (loss_map_tmax_lab+\
                                             loss_map_mtt_lab+\
@@ -362,13 +321,8 @@ if __name__ == "__main__":
             loss_labeled_batch.backward()
 
             optimizer_ED.step()
-            optimizer_F.step()
+            optimizer_F.step()  
             optimizer_C.step()
-
-            ##### GAN implementation #####
-            optimizer_Dis.zero_grad()
-            discriminator_loss.backward()
-            optimizer_Dis.step()
 
             # Start unlabeled batch ################################################################################################################################################################################################################################################################################
 
@@ -396,25 +350,6 @@ if __name__ == "__main__":
             loss_map_cbv_unlab = map_loss_compute(out_map_cbv_unlab, cbv_batch_unlabeled)
             loss_map_cbf_unlab = map_loss_compute(out_map_cbf_unlab, cbf_batch_unlabeled)
 
-            ##### Start of GAN code #####
-            # Real images are considered as real (label=1)
-            real_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
-            real_predictions = discriminator(seg_batch.to(device))
-            real_loss = adversarial_loss(real_predictions, real_labels)
-            
-            # Generated images are considered as fake (label=0)
-            fake_labels = torch.zeros(seg_batch.size(0), 1, 4, 4).to(device)
-            fake_predictions = discriminator(out_pseudo_seg_unlab.detach())
-            fake_loss = adversarial_loss(fake_predictions, fake_labels)
-            
-            discriminator_loss = real_loss + fake_loss
-
-            # Compute the generator's loss based on the discriminator's output
-            adversarial_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
-            adversarial_predictions = discriminator(out_pseudo_seg_unlab.to(device))
-            generator_loss = adversarial_loss(adversarial_predictions, adversarial_labels)
-            ##### End of GAN code #####
-
             # Consistency Loss
             loss_cons_unlab = torch.mean((out_seg_unlab - out_pseudo_seg_unlab) ** 2) * consistency_weight
 
@@ -429,7 +364,7 @@ if __name__ == "__main__":
 
             loss_unlabeled_batch = supervised_map_loss_unlab +\
                                     loss_cons_unlab +\
-                                    da_loss_unlab + 0.1*generator_loss
+                                    da_loss_unlab
 
             optimizer_ED.zero_grad()
             # optimizer_F.zero_grad()    
@@ -440,11 +375,6 @@ if __name__ == "__main__":
             optimizer_ED.step()
             # optimizer_F.step()   # Freeze Model F if the ground truth label is not available!
             optimizer_C.step()
-
-            ##### GAN implementation #####
-            optimizer_Dis.zero_grad()
-            discriminator_loss.backward()
-            optimizer_Dis.step()
     
             # Pass END #################################################
 
@@ -609,4 +539,3 @@ if __name__ == "__main__":
             break
 
     writer.close()
-    

@@ -31,7 +31,7 @@ def calculate_metric_seg(pred, gt):
 
 def calculate_metric_map(pred, gt):
     gt = gt.numpy().squeeze()
-    ssim = sm.structural_similarity(gt, pred)
+    ssim = sm.structural_similarity(gt, pred, data_range=1.0)
     psnr = sm.peak_signal_noise_ratio(gt, pred, data_range=1.0)
     mi = sm.normalized_mutual_information(gt, pred)
     return ssim, psnr, mi       # returns tuple
