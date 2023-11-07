@@ -13,12 +13,8 @@ from skimage.measure import regionprops, label, find_contours
 
 class CTPDataset(Dataset):
     """ CTP Dataset """
-<<<<<<< HEAD
 
     def __init__(self, base_dir=None, split='train', transform=None, hon=False, res=1):
-=======
-    def __init__(self, base_dir=None, split='train', transform=None, hon=False, res = 1):
->>>>>>> origin/main
         self.transform = transform
         self.labeled_list = []
         self.unlabeled_list = []
