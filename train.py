@@ -33,7 +33,7 @@ from networks.discriminator import Discriminator
 
 from skimage.io import imsave
 
-
+torch.cuda.set_device(4)
 
 parser = argparse.ArgumentParser()
 
@@ -163,6 +163,7 @@ base_lr_ED = args.lr_ed
 base_lr_F = args.lr_f
 base_lr_C = args.lr_c
 base_lr_Dis = args.lr_dis
+epsilon = 0.1
 
 # 4 parameter maps + 1 segmentation
 ED_decoder_branches = 5  
@@ -307,28 +308,27 @@ if __name__ == "__main__":
             loss_seg = seg_loss_fn(out_seg_lab, seg_batch)
             loss_pseudo_seg = seg_loss_fn(out_pseudo_seg_lab, seg_batch)
 
-            # Real images are considered as real (label=1)
-            real_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
-            real_predictions = discriminator(seg_batch.to(device))
-            real_loss = adversarial_loss(real_predictions, real_labels)
             
             ##### Start of GAN code #####
             # Real images are considered as real (label=1)
             real_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
+            real_labels_smoothed = real_labels * (1 - epsilon) + epsilon / 2  # Apply label smoothing
             real_predictions = discriminator(seg_batch.to(device))
-            real_loss = adversarial_loss(real_predictions, real_labels)
-            
+            real_loss = adversarial_loss(real_predictions, real_labels_smoothed)
+
             # Generated images are considered as fake (label=0)
             fake_labels = torch.zeros(seg_batch.size(0), 1, 4, 4).to(device)
+            fake_labels_smoothed = fake_labels + epsilon / 2  # Apply label smoothing
             fake_predictions = discriminator(out_pseudo_seg_lab.detach())
-            fake_loss = adversarial_loss(fake_predictions, fake_labels)
-            
+            fake_loss = adversarial_loss(fake_predictions, fake_labels_smoothed)
+
             discriminator_loss = real_loss + fake_loss
 
             # Compute the generator's loss based on the discriminator's output
             adversarial_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
+            adversarial_labels_smoothed = adversarial_labels * (1 - epsilon) + epsilon / 2  # Apply label smoothing
             adversarial_predictions = discriminator(out_pseudo_seg_lab.to(device))
-            generator_loss = adversarial_loss(adversarial_predictions, adversarial_labels)
+            generator_loss = adversarial_loss(adversarial_predictions, adversarial_labels_smoothed)
             ##### End of GAN code #####
 
             # Map estimation loss
@@ -364,16 +364,17 @@ if __name__ == "__main__":
             optimizer_F.zero_grad()
             optimizer_C.zero_grad()
 
-            loss_labeled_batch.backward()
+            loss_labeled_batch.backward(retain_graph=True)
+            # loss_labeled_batch.backward()
 
             optimizer_ED.step()
             optimizer_F.step()
             optimizer_C.step()
 
             ##### GAN implementation #####
-            optimizer_Dis.zero_grad()
-            discriminator_loss.backward()
-            optimizer_Dis.step()
+            # optimizer_Dis.zero_grad()
+            # discriminator_loss.backward()
+            # optimizer_Dis.step()
 
             # Start unlabeled batch ################################################################################################################################################################################################################################################################################
 
@@ -404,20 +405,23 @@ if __name__ == "__main__":
             ##### Start of GAN code #####
             # Real images are considered as real (label=1)
             real_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
+            real_labels_smoothed = real_labels * (1 - epsilon) + epsilon / 2  # Apply label smoothing
             real_predictions = discriminator(seg_batch.to(device))
-            real_loss = adversarial_loss(real_predictions, real_labels)
-            
+            real_loss = adversarial_loss(real_predictions, real_labels_smoothed)
+
             # Generated images are considered as fake (label=0)
             fake_labels = torch.zeros(seg_batch.size(0), 1, 4, 4).to(device)
-            fake_predictions = discriminator(out_pseudo_seg_unlab.detach())
-            fake_loss = adversarial_loss(fake_predictions, fake_labels)
-            
-            discriminator_loss = real_loss + fake_loss
+            fake_labels_smoothed = fake_labels + epsilon / 2  # Apply label smoothing
+            fake_predictions = discriminator(out_pseudo_seg_lab.detach())
+            fake_loss = adversarial_loss(fake_predictions, fake_labels_smoothed)
+
+            discriminator_loss += real_loss + fake_loss
 
             # Compute the generator's loss based on the discriminator's output
             adversarial_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
-            adversarial_predictions = discriminator(out_pseudo_seg_unlab.to(device))
-            generator_loss = adversarial_loss(adversarial_predictions, adversarial_labels)
+            adversarial_labels_smoothed = adversarial_labels * (1 - epsilon) + epsilon / 2  # Apply label smoothing
+            adversarial_predictions = discriminator(out_pseudo_seg_lab.to(device))
+            generator_loss = adversarial_loss(adversarial_predictions, adversarial_labels_smoothed)
             ##### End of GAN code #####
 
             # Consistency Loss
@@ -608,7 +612,8 @@ if __name__ == "__main__":
 
             if iter_num >= max_iterations:
                 break
-
+        # Free up GPU memory after processing all batches in the epoch
+        # torch.cuda.empty_cache()
         if iter_num >= max_iterations:
             iterator.close()
             break
