@@ -28,12 +28,13 @@ from networks.ed import create_model_ED
 from networks.f import create_model_F
 from datetime import datetime
 from networks.discriminator import Discriminator
+from torch.nn.parallel import DataParallel
 
 
 
 from skimage.io import imsave
 
-torch.cuda.set_device(4)
+# torch.cuda.set_device(4)
 
 parser = argparse.ArgumentParser()
 
@@ -173,7 +174,7 @@ ED_input_channels = args.patch_z
 F_input_channels = ED_decoder_branches -1
 
 # Move the target tensor to the GPU
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 
@@ -186,7 +187,12 @@ if __name__ == "__main__":
                              n_filters = 16)
     model_C = AdversarialNetwork(max_iterations).cuda()  # Domain adaptation module
     # https://arxiv.org/abs/1505.07818 - Domain-Adversarial training of neural networks
-    discriminator = Discriminator(input_channel = 1, n_filters = 16).to(device)
+    discriminator = Discriminator(input_channel = 1, n_filters = 16).cuda()
+
+    model_ED = DataParallel(model_ED)
+    model_F = DataParallel(model_F)
+    model_C = DataParallel(model_C)
+    discriminator = DataParallel(discriminator)
 
     db_train = CTPDataset(base_dir=data_path,
                        split='train',  # train/val split
@@ -266,7 +272,7 @@ if __name__ == "__main__":
 
             # labeled data load
             data_batch_labeled = sampled_batch['data'][:labeled_bs].cuda()
-            tmax_batch_labeled = sampled_batch['tmax'][:labeled_bs].cuda()      
+            tmax_batch_labeled = sampled_batch['tmax'][:labeled_bs].cuda()
             mtt_batch_labeled = sampled_batch['mtt'][:labeled_bs].cuda()
             cbv_batch_labeled = sampled_batch['cbv'][:labeled_bs].cuda()
             cbf_batch_labeled = sampled_batch['cbf'][:labeled_bs].cuda()
@@ -311,13 +317,13 @@ if __name__ == "__main__":
             
             ##### Start of GAN code #####
             # Real images are considered as real (label=1)
-            real_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
+            real_labels = torch.ones(seg_batch.size(0), 1, 4, 4).cuda()
             real_labels_smoothed = real_labels * (1 - epsilon) + epsilon / 2  # Apply label smoothing
-            real_predictions = discriminator(seg_batch.to(device))
+            real_predictions = discriminator(seg_batch.cuda())
             real_loss = adversarial_loss(real_predictions, real_labels_smoothed)
 
             # Generated images are considered as fake (label=0)
-            fake_labels = torch.zeros(seg_batch.size(0), 1, 4, 4).to(device)
+            fake_labels = torch.zeros(seg_batch.size(0), 1, 4, 4).cuda()
             fake_labels_smoothed = fake_labels + epsilon / 2  # Apply label smoothing
             fake_predictions = discriminator(out_pseudo_seg_lab.detach())
             fake_loss = adversarial_loss(fake_predictions, fake_labels_smoothed)
@@ -325,9 +331,9 @@ if __name__ == "__main__":
             discriminator_loss = real_loss + fake_loss
 
             # Compute the generator's loss based on the discriminator's output
-            adversarial_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
+            adversarial_labels = torch.ones(seg_batch.size(0), 1, 4, 4).cuda()
             adversarial_labels_smoothed = adversarial_labels * (1 - epsilon) + epsilon / 2  # Apply label smoothing
-            adversarial_predictions = discriminator(out_pseudo_seg_lab.to(device))
+            adversarial_predictions = discriminator(out_pseudo_seg_lab.cuda())
             generator_loss = adversarial_loss(adversarial_predictions, adversarial_labels_smoothed)
             ##### End of GAN code #####
 
@@ -364,7 +370,7 @@ if __name__ == "__main__":
             optimizer_F.zero_grad()
             optimizer_C.zero_grad()
 
-            loss_labeled_batch.backward(retain_graph=True)
+            loss_labeled_batch.mean().backward(retain_graph=True)
             # loss_labeled_batch.backward()
 
             optimizer_ED.step()
@@ -404,13 +410,13 @@ if __name__ == "__main__":
 
             ##### Start of GAN code #####
             # Real images are considered as real (label=1)
-            real_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
+            real_labels = torch.ones(seg_batch.size(0), 1, 4, 4).cuda()
             real_labels_smoothed = real_labels * (1 - epsilon) + epsilon / 2  # Apply label smoothing
-            real_predictions = discriminator(seg_batch.to(device))
+            real_predictions = discriminator(seg_batch.cuda())
             real_loss = adversarial_loss(real_predictions, real_labels_smoothed)
 
             # Generated images are considered as fake (label=0)
-            fake_labels = torch.zeros(seg_batch.size(0), 1, 4, 4).to(device)
+            fake_labels = torch.zeros(seg_batch.size(0), 1, 4, 4).cuda()
             fake_labels_smoothed = fake_labels + epsilon / 2  # Apply label smoothing
             fake_predictions = discriminator(out_pseudo_seg_lab.detach())
             fake_loss = adversarial_loss(fake_predictions, fake_labels_smoothed)
@@ -418,9 +424,9 @@ if __name__ == "__main__":
             discriminator_loss += real_loss + fake_loss
 
             # Compute the generator's loss based on the discriminator's output
-            adversarial_labels = torch.ones(seg_batch.size(0), 1, 4, 4).to(device)
+            adversarial_labels = torch.ones(seg_batch.size(0), 1, 4, 4).cuda()
             adversarial_labels_smoothed = adversarial_labels * (1 - epsilon) + epsilon / 2  # Apply label smoothing
-            adversarial_predictions = discriminator(out_pseudo_seg_lab.to(device))
+            adversarial_predictions = discriminator(out_pseudo_seg_lab.cuda())
             generator_loss = adversarial_loss(adversarial_predictions, adversarial_labels_smoothed)
             ##### End of GAN code #####
 
@@ -444,7 +450,7 @@ if __name__ == "__main__":
             # optimizer_F.zero_grad()    
             optimizer_C.zero_grad()
 
-            loss_unlabeled_batch.backward()
+            loss_unlabeled_batch.mean().backward()
 
             optimizer_ED.step()
             # optimizer_F.step()   # Freeze Model F if the ground truth label is not available!
